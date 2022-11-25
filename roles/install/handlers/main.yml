@@ -1,0 +1,5 @@
+- name: restart openvpn
+  systemd:
+    name: openvpn-server@server.service
+    state: restarted
+    enabled: yes

@@ -1,0 +1,16 @@
+---
+- hosts: all
+  become: true
+  vars:
+    clients:
+    - v.medvedev
+    - test_user
+    - test_user2
+    network:
+      address: 10.8.0.0
+      mask: 255.255.0.0
+      mask_prefix: 16
+    remote_server: YOUR_REMOTE_HOST
+  roles:
+    - install
+    - clients

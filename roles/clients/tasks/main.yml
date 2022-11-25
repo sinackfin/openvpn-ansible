@@ -1,0 +1,102 @@
+- name: Create clients directory
+  file:
+    path: "{{ item }}"
+    state: directory
+  with_items:
+    - client-configs/keys
+    - client-configs/files
+
+- name: Find all private keys
+  ansible.builtin.find:
+    paths: /usr/share/easy-rsa/pki/private/
+    patterns: '*.key'
+    excludes: 
+      - 'server.key'
+      - 'ca.key'
+  register: found_keys
+
+- set_fact:
+    found_keys_files: "{{ found_keys.files | map(attribute='path') | map('basename')  }}"
+
+- name: convert array
+  set_fact:
+    converted_arr: "{{ clients | map('regex_replace', '^(.*)$', '\\1.key') | list }}"
+
+- name: revoke clients array
+  set_fact:
+    revoke_arr: "{{ found_keys_files | difference(converted_arr)  | map('regex_replace', '^(.*).key$', '\\1') | list }}"
+
+- name: add new clients array
+  set_fact:
+    new_clients_arr: "{{ converted_arr | difference(found_keys_files) | map('regex_replace', '^(.*).key$', '\\1') | list  }}"
+
+
+- name: revoke certs
+  shell: 
+    chdir: /usr/share/easy-rsa/
+    cmd: "./easyrsa revoke {{ item }}"
+  with_items: "{{ revoke_arr }}"
+
+- name: Delete OVPN revoked files
+  shell: 
+    chdir: client-configs/files
+    cmd: "rm -f {{ item }}.ovpn"
+  with_items: "{{ revoke_arr }}"
+
+- name: update CRL
+  shell: 
+    chdir: /usr/share/easy-rsa/
+    cmd: ./easyrsa gen-crl
+
+- name: Copy ta key
+  copy:
+    src: "/usr/share/easy-rsa/pki/crl.pem"
+    dest: /etc/openvpn/server/
+    remote_src: yes
+
+- name: certs for new users
+  shell: 
+    chdir: /usr/share/easy-rsa/
+    cmd: "./easyrsa gen-req {{ item }} nopass"
+  with_items: "{{ new_clients_arr }}"
+
+- name: sign req for new users
+  shell: 
+    chdir: /usr/share/easy-rsa/
+    cmd: "./easyrsa sign-req client {{ item }}"
+  with_items: "{{ new_clients_arr }}"
+
+
+- name: Find actuate private keys
+  ansible.builtin.find:
+    paths: /usr/share/easy-rsa/pki/private/
+    patterns: '*.key'
+    excludes: 
+      - 'server.key'
+      - 'ca.key'
+  register: found_keys_actuate
+
+- name: Copy profile script key
+  copy:
+    src: "/usr/share/easy-rsa/pki/crl.pem"
+    dest: /etc/openvpn/server/
+    remote_src: yes
+
+- name: Copy client config
+  template:
+    src: client.conf.j2
+    dest: client-configs/base.conf
+
+- name: Copy profile script key
+  copy:
+    src: gen_openvpn_profile.sh
+    dest: client-configs/
+
+- name: Generate Profile files
+  shell: "bash client-configs/gen_openvpn_profile.sh {{ item }}"
+  with_items: "{{ found_keys_actuate.files | map(attribute='path') | map('basename') | map('regex_replace', '^(.*).key$', '\\1') | list }}"
+
+- name: Compress directory with OVPN files
+  archive:
+    path: client-configs/files
+    dest: client-configs/vpn-profiles.tgz

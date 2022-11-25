@@ -1,0 +1,122 @@
+- name: install openvpn and easy-rsa
+  apt:
+    update_cache: yes
+    name: "{{ item }}"
+  with_items:
+  - openvpn
+  - easy-rsa
+
+- name: copy vars
+  copy:
+    src: vars
+    dest: /usr/share/easy-rsa/
+
+- name: check directory pki
+  stat: 
+    path: /usr/share/easy-rsa/pki
+  register: pki_exists
+
+- name: init pki
+  shell:
+    cmd: ./easyrsa init-pki
+    chdir: /usr/share/easy-rsa/
+  when: not pki_exists.stat.exists
+
+- name: check CA certs
+  stat: 
+    path: /usr/share/easy-rsa/pki/ca.crt
+  register: pki_ca_exists
+
+- name: build CA
+  shell:
+    chdir: /usr/share/easy-rsa/
+    cmd: ./easyrsa build-ca nopass
+  when: not pki_ca_exists.stat.exists
+
+- name: openvpn cert reqs
+  shell: 
+    cmd: ./easyrsa gen-req server nopass
+    chdir: /usr/share/easy-rsa/
+
+- name: copy vars
+  copy:
+    src: /usr/share/easy-rsa/pki/private/server.key
+    dest: /etc/openvpn/server/
+    remote_src: yes
+
+- name: copy config
+  template:
+    src: server.conf
+    dest: /etc/openvpn/server/
+  notify: restart openvpn
+
+- name: Set net.ipv4.ip_forward = 1
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: 1
+    state: present
+    reload: yes
+
+- name: check req file
+  stat: 
+    path: /usr/share/easy-rsa/pki/reqs/server.req
+  register: pki_req_exists
+
+- name: import server req
+  shell:
+    cmd: ./easyrsa sign-req server server
+    chdir: /usr/share/easy-rsa/
+
+- name: Copy ca.crt and server.crt
+  copy:
+    src: "{{ item }}"
+    dest: /etc/openvpn/server/
+    remote_src: yes
+  with_items:
+  - /usr/share/easy-rsa/pki/ca.crt
+  - /usr/share/easy-rsa/pki/issued/server.crt
+
+- name: check ta key
+  stat: 
+    path: /usr/share/easy-rsa/ta.key
+  register: pki_ta_exists
+
+- name: import server req
+  shell: 
+    chdir: /usr/share/easy-rsa/
+    cmd: openvpn --genkey --secret ta.key
+  when: not pki_ta_exists.stat.exists
+
+
+- name: Copy ta key
+  copy:
+    src: "/usr/share/easy-rsa/ta.key"
+    dest: /etc/openvpn/server/
+    remote_src: yes
+
+- name: Allow related and established connections
+  iptables:
+    source: "{{ network.address }}/{{ network.mask_prefix }}"
+    chain: FORWARD
+    jump: ACCEPT
+
+- name: Allow related and established connections 2
+  iptables:
+    source: "{{ network.address }}/{{ network.mask_prefix }}"
+    chain: FORWARD
+    ctstate: ESTABLISHED,RELATED
+    jump: ACCEPT
+
+- name: Allow forwading to the Internet
+  iptables:
+    source: "{{ network.address }}/{{ network.mask_prefix }}"
+    table: nat
+    to_source: "{{ ansible_default_ipv4.address }}"
+    chain: POSTROUTING
+    jump: SNAT
+
+- name: Enable service
+  systemd:
+    name: openvpn-server@server.service
+    state: started
+    enabled: yes

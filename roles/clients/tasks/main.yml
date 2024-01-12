@@ -7,7 +7,7 @@
     - client-configs/files
 
 - name: Find all private keys
-  ansible.builtin.find:
+  find:
     paths: /usr/share/easy-rsa/pki/private/
     patterns: '*.key'
     excludes: 
@@ -20,7 +20,15 @@
 
 - name: convert array
   set_fact:
-    converted_arr: "{{ clients | map('regex_replace', '^(.*)$', '\\1.key') | list }}"
+    converted_arr: "{{ clients | map('regex_replace', '^(.*)@.*$', '\\1.key') | list }}"
+
+- name: convert array
+  set_fact:
+    client_arr: "{{ clients | map('regex_replace', '^(.*)@.*$', '\\1') | list }}"
+
+- name: convert array to dict
+  set_fact:
+    email_dict: "{{ clients | map('regex_replace', '^(.*)@.*$', '\\1') | zip(clients) | community.general.dict }}"
 
 - name: revoke clients array
   set_fact:
@@ -36,11 +44,13 @@
     chdir: /usr/share/easy-rsa/
     cmd: "./easyrsa revoke {{ item }}"
   with_items: "{{ revoke_arr }}"
+  notify:
+    - restart openvpn
 
 - name: Delete OVPN revoked files
   shell: 
     chdir: client-configs/files
-    cmd: "rm -f {{ item }}.ovpn"
+    cmd: "rm -f {{ item }}-{{server_prefix}}.ovpn"
   with_items: "{{ revoke_arr }}"
 
 - name: update CRL
@@ -48,27 +58,19 @@
     chdir: /usr/share/easy-rsa/
     cmd: ./easyrsa gen-crl
 
-- name: Copy ta key
+- name: Copy crl key
   copy:
     src: "/usr/share/easy-rsa/pki/crl.pem"
     dest: /etc/openvpn/server/
     remote_src: yes
-
 - name: certs for new users
   shell: 
     chdir: /usr/share/easy-rsa/
-    cmd: "./easyrsa gen-req {{ item }} nopass"
+    cmd: "./easyrsa --batch --days=3650 build-client-full {{item}} nopass"
   with_items: "{{ new_clients_arr }}"
-
-- name: sign req for new users
-  shell: 
-    chdir: /usr/share/easy-rsa/
-    cmd: "./easyrsa sign-req client {{ item }}"
-  with_items: "{{ new_clients_arr }}"
-
 
 - name: Find actuate private keys
-  ansible.builtin.find:
+  find:
     paths: /usr/share/easy-rsa/pki/private/
     patterns: '*.key'
     excludes: 
@@ -93,10 +95,19 @@
     dest: client-configs/
 
 - name: Generate Profile files
-  shell: "bash client-configs/gen_openvpn_profile.sh {{ item }}"
+  shell: "bash client-configs/gen_openvpn_profile.sh {{ item }} {{server_prefix}}"
   with_items: "{{ found_keys_actuate.files | map(attribute='path') | map('basename') | map('regex_replace', '^(.*).key$', '\\1') | list }}"
 
-- name: Compress directory with OVPN files
-  archive:
-    path: client-configs/files
-    dest: client-configs/vpn-profiles.tgz
+- name: Send e-mail to a bunch of users, attaching files
+  community.general.mail:
+    host: "{{ smtp.host }}"
+    port: "{{ smtp.port }}"
+    username: "{{ smtp.username }}"
+    password: "{{ lookup('ansible.builtin.env', 'MAIL_PASS') }}"
+    to: "No-replay-IDS <{{ email_dict[item] }}>"
+    subject: OpenVPN
+    body: Your VPN
+    from: infra-ids-no-reply@idynsys.org (infra-ids-no-reply)
+    attach:
+    - "client-configs/files/{{ item }}-{{ server_prefix }}.ovpn"
+  with_items: "{{ new_clients_arr }}"

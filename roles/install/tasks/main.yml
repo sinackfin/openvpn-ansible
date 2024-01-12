@@ -1,3 +1,12 @@
+- name: Add an Apt signing key to a specific keyring file
+  ansible.builtin.apt_key:
+    url: https://swupdate.openvpn.net/repos/repo-public.gpg
+    keyring: /usr/share/keyrings/openvpn-public.gpg
+
+- name: build CA
+  shell:
+    cmd: echo "deb [arch=amd64 signed-by=/usr/share/keyrings/openvpn-public.gpg] https://build.openvpn.net/debian/openvpn/release/2.6 focal main" > /etc/apt/sources.list.d/openvpn-aptrepo.list
+
 - name: install openvpn and easy-rsa
   apt:
     update_cache: yes
@@ -38,7 +47,7 @@
     cmd: ./easyrsa gen-req server nopass
     chdir: /usr/share/easy-rsa/
 
-- name: copy vars
+- name: copy server key
   copy:
     src: /usr/share/easy-rsa/pki/private/server.key
     dest: /etc/openvpn/server/
@@ -67,7 +76,7 @@
     cmd: ./easyrsa sign-req server server
     chdir: /usr/share/easy-rsa/
 
-- name: Copy ca.crt and server.crt
+- name: Copy PKI ca.crt and server.crt
   copy:
     src: "{{ item }}"
     dest: /etc/openvpn/server/
@@ -81,7 +90,7 @@
     path: /usr/share/easy-rsa/ta.key
   register: pki_ta_exists
 
-- name: import server req
+- name: Generate ta key
   shell: 
     chdir: /usr/share/easy-rsa/
     cmd: openvpn --genkey --secret ta.key
@@ -94,26 +103,28 @@
     dest: /etc/openvpn/server/
     remote_src: yes
 
-- name: Allow related and established connections
+
+
+- name: MASQUERADE
   iptables:
-    source: "{{ network.address }}/{{ network.mask_prefix }}"
+    table: nat
+    source: "{{ server_range }}/{{ server_range_mask_short }}"
+    chain: POSTROUTING
+    jump: MASQUERADE
+
+- name: Allow new connections
+  iptables:
+    source: "{{ server_range }}/{{ server_range_mask_short }}"
     chain: FORWARD
+    ctstate: NEW
     jump: ACCEPT
 
-- name: Allow related and established connections 2
+- name: Allow related and established connections
   iptables:
-    source: "{{ network.address }}/{{ network.mask_prefix }}"
+    source: "{{ server_range }}/{{ server_range_mask_short }}"
     chain: FORWARD
     ctstate: ESTABLISHED,RELATED
     jump: ACCEPT
-
-- name: Allow forwading to the Internet
-  iptables:
-    source: "{{ network.address }}/{{ network.mask_prefix }}"
-    table: nat
-    to_source: "{{ ansible_default_ipv4.address }}"
-    chain: POSTROUTING
-    jump: SNAT
 
 - name: Enable service
   systemd:

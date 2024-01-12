@@ -3,14 +3,29 @@
   become: true
   vars:
     clients:
-    - v.medvedev
-    - test_user
-    - test_user2
-    network:
-      address: 10.8.0.0
-      mask: 255.255.0.0
-      mask_prefix: 16
-    remote_server: YOUR_REMOTE_HOST
+    - test@mail.com 
+    - test2@mail.com 
+    routes:
+      dev:
+      - address: 10.53.64.0
+        mask: 	255.255.192.0
+        mask_prefix: 18
+      - address: 10.52.0.0
+        mask: 255.255.0.0
+        mask_prefix: 16
+      - address: 10.217.0.3
+        mask: 255.255.255.255
+        mask_prefix: 32
+    remote_server: YOUR VPC IP ADDRESS
+    server_range: 10.10.0.0
+    server_range_mask: 255.255.0.0
+    server_range_mask_short: 16
+    server_prefix: "dev"
+    smtp:
+      username: YOUR USERNAME TO SEND OVPN profile via email 
+      host: smtp host
+      port: 587
+      # PASS must be in MAIL_PASS env OR you can change it in roles/clients/tasks/main.yml 101
   roles:
     - install
     - clients
